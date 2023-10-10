@@ -11,18 +11,19 @@ import { uid } from 'uid';
 
 import { Emitter } from './NodeEmitter';
 
-import { ClientOptions, Pointer, TypeResolvable, Container, ContainerTable, PredicateType } from '../types';
+import { ClientOptions, Pointer, Container, PredicateType, ResolvableType, SchemaObject, TableType } from '../types';
 
-import Table from './Table';
+import Entity from './Entity';
 
 import parsePath from '../helpers/parsePath';
 
 import parseSrc from '../helpers/parseSrc';
 
-import path from 'path'; 
+import path from 'path';
 
-export interface Client
-{
+import BaseSchema from './BaseSchema';
+
+export interface Client {
 	Options: ClientOptions;
 
 	Database: string;
@@ -34,8 +35,7 @@ export interface Client
 	Path: string[];
 }
 
-export class Client
-{
+export class Client {
 	/**
 	 * @typedef {Object} ClientOptions
 	 * @property {string=} Path
@@ -47,30 +47,27 @@ export class Client
 	 * @param {number} [index=]
 	 * @param {T[]} [array=]
 	 */
-	
+
 	/**
 	 * @typedef {(object[] | string[] | number[])} AnyArray
 	 */
-	
+
 	/**
 	 * @typedef {(string | object | AnyArray | number)} TypeResolvable
 	 */
-	
+
 
 	/**
 	 * @constructor
 	 * @param {ClientOptions} Options - Put database name and path
 	 */
-	constructor(Options: ClientOptions)
-	{
+	constructor(Options: ClientOptions) {
 		this.Options = Options;
 
-		if (typeof this.Options.Path === "undefined" || !this.Options.Path)
-		{
+		if (typeof this.Options.Path === "undefined" || !this.Options.Path) {
 			this.Options.Path = parseSrc();
 		}
-		else
-		{
+		else {
 			this.Options.Path = path.join(...parsePath(this.Options.Path));
 		}
 
@@ -87,22 +84,34 @@ export class Client
 		Emitter.emit("start");
 	}
 
-	private CheckFolders(): void
-	{
-		if(typeof this.Options.Path === "undefined")
+	private getBuffer(): number {
+		if (typeof this.Options.Buffer === "undefined")
+			this.Options.Buffer = 512;
+
+		return this.Options.Buffer;
+	}
+
+	private getPath(): string {
+		if (typeof this.Options.Path === "undefined")
 			throw new Error("An error occurred and the path was not specified.");
-		
-		if (!fs.existsSync(this.Options.Path))
+
+		return this.Options.Path;
+	}
+
+	private getFolders(): boolean {
+		if (!fs.existsSync(this.getPath()))
 			throw new Error("(ODB-01) The path you specified was not found.");
 
-		if (!fs.existsSync(path.join(this.Options.Path, 'OpenDB')))
+		if (!fs.existsSync(path.join(this.getPath(), 'OpenDB')))
 			throw new Error("(ODB-02) The database root folder not exists.");
-		
-		if (this.Database === "none") 
+
+		if (this.Database === "none")
 			throw new Error("(ODB-10) The database is not configured.");
 
-		if (!fs.existsSync(path.join(this.Options.Path, 'OpenDB', this.Database)))
+		if (!fs.existsSync(path.join(this.getPath(), 'OpenDB', this.Database)))
 			throw new Error("(ODB-03) This database does not exist, read https://github.com/PrintfDead/OpenDB#readme to know how to fix this error.");
+	
+		return true;
 	}
 
 	/**
@@ -112,27 +121,23 @@ export class Client
 	 * @returns void
 	 */
 	public Update(deserializeOptions?: BSON.DeserializeOptions): void {
-		this.CheckFolders();
+		if (!this.getFolders()) return;
 
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
-
-		if (!deserializeOptions) 
+		if (!deserializeOptions)
 			deserializeOptions = { allowObjectSmallerThanBufferSize: true };
 		else {
-			if (!Object.keys(deserializeOptions).includes("allowObjectSmallerThanBufferSize") || deserializeOptions.allowObjectSmallerThanBufferSize === false) {
+			if (!Object.keys(deserializeOptions).includes("allowObjectSmallerThanBufferSize") || deserializeOptions.allowObjectSmallerThanBufferSize === false || !deserializeOptions.allowObjectSmallerThanBufferSize) {
 				deserializeOptions.allowObjectSmallerThanBufferSize = true;
 			}
 		}
 
-		for (const file of fs.readdirSync(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers'), { recursive: true }))
-		{
-			const _file = fs.readFileSync(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', file as string));
+		for (const file of fs.readdirSync(path.join(this.getPath(), 'OpenDB', this.Database, 'Containers'), { recursive: true })) {
+			const _file = fs.readFileSync(path.join(this.getPath(), 'OpenDB', this.Database, 'Containers', file as string));
 
 			let Document: Container[] = [];
 
 			BSON.deserializeStream(_file, 0, 1, Document, 0, deserializeOptions);
-				
+
 			Document.forEach((container) => {
 				if (!container.ID || !container.Tables) return;
 
@@ -153,24 +158,18 @@ export class Client
 	 * @description Create root folder
 	 * @returns {Promise<this>}
 	 */
-	public async Start(): Promise<this>
-	{
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
-
-		if (!fs.existsSync(this.Options.Path))
+	private async CreateRoot(): Promise<this> {
+		if (!fs.existsSync(this.getPath()))
 			throw new Error("(ODB-01) The path you specified was not found.");
 
-		if (fs.existsSync(path.join(this.Options.Path, 'OpenDB')))
-		{
+		if (fs.existsSync(path.join(this.getPath(), 'OpenDB'))) {
 			console.log("(Warn-01) The root folder already exists, nothing will be created and this function will be skipped.");
 
 			return this;
 		}
 
-		await fs.promises.mkdir(path.join(this.Options.Path, 'OpenDB'), { recursive: true })
-			.catch((Error) =>
-			{
+		await fs.promises.mkdir(path.join(this.getPath(), 'OpenDB'), { recursive: true })
+			.catch((Error) => {
 				if (Error) Emitter.emit("error", Error);
 			});
 
@@ -184,39 +183,31 @@ export class Client
 	 * @description Create database folder
 	 * @returns {Promise<this>}
 	 */
-	public async CreateDatabase(Name: string): Promise<this>
-	{
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
-		
-		if (!fs.existsSync(this.Options.Path))
+	private async CreateDatabase(Name: string): Promise<this> {
+		if (!fs.existsSync(this.getPath()))
 			throw new Error("(ODB-01) The path you specified was not found.");
 
-		if (!fs.existsSync(path.join(this.Options.Path, 'OpenDB')))
-			throw new Error("(ODB-02) The database root folder not exists.");
+		if (!fs.existsSync(path.join(this.getPath(), 'OpenDB')))
+			await this.CreateRoot();
 
-		if (fs.existsSync(path.join(this.Options.Path, 'OpenDB', Name)))
-		{
+		if (fs.existsSync(path.join(this.getPath(), 'OpenDB', Name))) {
 			console.log("(Warn-02) The database already exists.");
 
 			return this;
 		}
 
-		await fs.promises.mkdir(path.join(this.Options.Path, 'OpenDB', Name), { recursive: true })
-			.catch((Error) =>
-			{
+		await fs.promises.mkdir(path.join(this.getPath(), 'OpenDB', Name), { recursive: true })
+			.catch((Error) => {
 				if (Error) Emitter.emit("error", Error);
 			});
 
-		await fs.promises.mkdir(path.join(this.Options.Path, 'OpenDB', Name, 'Pointers'), { recursive: true })
-			.catch((Error) =>
-			{
+		await fs.promises.mkdir(path.join(this.getPath(), 'OpenDB', Name, 'Pointers'), { recursive: true })
+			.catch((Error) => {
 				if (Error) Emitter.emit("error", Error);
 			});
 
-		await fs.promises.mkdir(path.join(this.Options.Path, 'OpenDB', Name, 'Containers'), { recursive: true })
-			.catch((Error) =>
-			{
+		await fs.promises.mkdir(path.join(this.getPath(), 'OpenDB', Name, 'Containers'), { recursive: true })
+			.catch((Error) => {
 				if (Error) Emitter.emit("error", Error);
 			});
 
@@ -230,25 +221,11 @@ export class Client
 	 * @description Set database
 	 * @returns {this}
 	 */
-	public SetDatabase(Name: string, deserializeOptions?: BSON.DeserializeOptions): this
-	{
-		if (typeof this.Options.Path === "string")
-		{
-			if (!fs.existsSync(this.Options.Path))
-				throw new Error("(ODB-01) The path you specified was not found.");
-
-			if (fs.existsSync(path.join(this.Options.Path, 'OpenDB')))
-			{
-				if (!fs.existsSync(path.join(this.Options.Path, 'OpenDB', Name)))
-					throw new Error("(ODB-03) This database does not exist, read https://github.com/PrintfDead/OpenDB#readme to know how to fix this error.");
-			}
-			else
-			{
-				throw new Error("(ODB-02) The database root folder not exists.");
-			}
-		} 
-		else if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
+	public async InstanceDatabase(Name: string, deserializeOptions?: BSON.DeserializeOptions): Promise<this> {
+		if (fs.existsSync(path.join(this.getPath(), 'OpenDB')))
+			await this.CreateRoot();
+		if (!fs.existsSync(path.join(this.getPath(), 'OpenDB', Name)))
+			await this.CreateDatabase(Name);
 
 		if (this.Database === "none")
 			this.Database = Name;
@@ -256,18 +233,17 @@ export class Client
 			this.Database = Name;
 		}
 
-		if (!deserializeOptions) 
+		if (!deserializeOptions)
 			deserializeOptions = { allowObjectSmallerThanBufferSize: true };
 		else {
-			if (!Object.keys(deserializeOptions).includes("allowObjectSmallerThanBufferSize") || deserializeOptions.allowObjectSmallerThanBufferSize === false) {
+			if (!Object.keys(deserializeOptions).includes("allowObjectSmallerThanBufferSize") || deserializeOptions.allowObjectSmallerThanBufferSize === false || !deserializeOptions.allowObjectSmallerThanBufferSize) {
 				deserializeOptions.allowObjectSmallerThanBufferSize = true;
 			}
 		}
 
-		for (const file of fs.readdirSync(path.join(this.Options.Path, 'OpenDB', Name, 'Pointers'), { recursive: true }))
-		{
-			const pointerFile = fs.readFileSync(path.join(this.Options.Path, 'OpenDB', Name, 'Pointers', file as string));
-			
+		for (const file of fs.readdirSync(path.join(this.getPath(), 'OpenDB', Name, 'Pointers'), { recursive: true })) {
+			const pointerFile = fs.readFileSync(path.join(this.getPath(), 'OpenDB', Name, 'Pointers', file as string));
+
 			const pointer = BSON.deserialize(pointerFile);
 
 			const pointerDoc: Pointer = {
@@ -280,14 +256,13 @@ export class Client
 			this.Pointers.set(pointer.ID, pointerDoc);
 		}
 
-		for (const file of fs.readdirSync(path.join(this.Options.Path, 'OpenDB', Name, 'Containers'), { recursive: true }))
-		{
-			const _file = fs.readFileSync(path.join(this.Options.Path, 'OpenDB', Name, 'Containers', file as string));
+		for (const file of fs.readdirSync(path.join(this.getPath(), 'OpenDB', Name, 'Containers'), { recursive: true })) {
+			const _file = fs.readFileSync(path.join(this.getPath(), 'OpenDB', Name, 'Containers', file as string));
 
 			let Document: Container[] = [];
 
 			BSON.deserializeStream(_file, 0, 1, Document, 0, deserializeOptions);
-				
+
 			Document.forEach((container) => {
 				if (!container.ID || !container.Tables) return;
 
@@ -300,7 +275,7 @@ export class Client
 				this.Containers.set(container.ID, _container);
 			});
 		}
-		
+
 		return this;
 	}
 
@@ -311,15 +286,10 @@ export class Client
 	 * @description Create pointer
 	 * @returns {Promise<void>}
 	 */
-	public async CreatePointer(Reference: string | number): Promise<void>
-	{
-		this.CheckFolders();
-		
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
+	public async CreatePointer(Reference: string | number): Promise<void> {
+		if (!this.getFolders()) return;
 
-		if (this.GetPointer(Reference) !== undefined)
-		{
+		if (this.GetPointer(Reference) !== undefined) {
 			console.warn("(Warn-04) A pointer with this reference already exists, the pointer will not be created.");
 			return;
 		}
@@ -328,25 +298,23 @@ export class Client
 		const IDContainer = uid(18);
 
 		const container = {
-			ID:      IDContainer,
+			ID: IDContainer,
 			Tables: []
 		};
 
 		const pointer = {
-			ID:         IDPointer,
-			Reference:  Reference,
-			Containers: [ IDContainer ]
+			ID: IDPointer,
+			Reference: Reference,
+			Containers: [IDContainer]
 		};
 
-		await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Pointers', IDPointer+'.bson'), BSON.serialize(pointer))
-			.catch((error) =>
-			{
+		await fs.promises.writeFile(path.join(this.getPath(), 'OpenDB', this.Database, 'Pointers', IDPointer + '.bson'), BSON.serialize(pointer))
+			.catch((error) => {
 				if (error) Emitter.emit("error", error);
 			});
 
-		await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', IDContainer+'.bson'), BSON.serialize(container))
-			.catch((error) =>
-			{
+		await fs.promises.writeFile(path.join(this.getPath(), 'OpenDB', this.Database, 'Containers', IDContainer + '.bson'), BSON.serialize(container))
+			.catch((error) => {
 				if (error) Emitter.emit("error", error);
 			});
 
@@ -360,32 +328,23 @@ export class Client
 	 * @description Get pointer
 	 * @returns {BSON.Document}
 	 */
-	public GetPointer(Reference: string | number): BSON.Document | undefined
-	{
-		this.CheckFolders();
-		
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
+	public GetPointer(Reference: string | number): BSON.Document | undefined {
+		if (!this.getFolders()) return;
 
 		let _pointer = undefined;
 
-		this.Pointers.forEach((x) =>
-		{
-			if (x.Reference === Reference)
-			{
+		this.Pointers.forEach((x) => {
+			if (x.Reference === Reference) {
 				_pointer = x;
 			}
 		});
 
-		if (_pointer === undefined)
-		{
-			for (const file of fs.readdirSync(path.join(this.Options.Path, 'OpenDB', this.Database, 'Pointers')))
-			{
-				const pointerFile = fs.readFileSync(path.join(this.Options.Path, 'OpenDB', this.Database, 'Pointers', file as string));
+		if (_pointer === undefined) {
+			for (const file of fs.readdirSync(path.join(this.getPath(), 'OpenDB', this.Database, 'Pointers'))) {
+				const pointerFile = fs.readFileSync(path.join(this.getPath(), 'OpenDB', this.Database, 'Pointers', file as string));
 				const pointer = BSON.deserialize(pointerFile);
 
-				if (Reference === pointer.Reference)
-				{
+				if (Reference === pointer.Reference) {
 					_pointer = pointer;
 				}
 			}
@@ -401,160 +360,109 @@ export class Client
 	 * @description Get Container
 	 * @returns {BSON.Document}
 	 */
-	public GetContainer(Container: string, deserializeOptions?: BSON.DeserializeOptions): BSON.Document | undefined
-	{
-		this.CheckFolders();
-		
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
-		
-		if (!this.Containers.get(Container))
-		{
+	public GetContainer(Container: string, deserializeOptions?: BSON.DeserializeOptions): BSON.Document | undefined {
+		if (!this.getFolders()) return;
+
+		if (!this.Containers.get(Container)) {
 			let _container = undefined;
 
-			if (!deserializeOptions) 
+			if (!deserializeOptions)
 				deserializeOptions = { allowObjectSmallerThanBufferSize: true };
 			else {
-				if (!Object.keys(deserializeOptions).includes("allowObjectSmallerThanBufferSize") || deserializeOptions.allowObjectSmallerThanBufferSize === false) {
+				if (!Object.keys(deserializeOptions).includes("allowObjectSmallerThanBufferSize") || deserializeOptions.allowObjectSmallerThanBufferSize === false || !deserializeOptions.allowObjectSmallerThanBufferSize) {
 					deserializeOptions.allowObjectSmallerThanBufferSize = true;
 				}
 			}
 
-			for (const file of fs.readdirSync(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers')))
-			{
-				const _file = fs.readFileSync(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', file as string));
+			for (const file of fs.readdirSync(path.join(this.getPath(), 'OpenDB', this.Database, 'Containers'))) {
+				const _file = fs.readFileSync(path.join(this.getPath(), 'OpenDB', this.Database, 'Containers', file as string));
 				let Document: Container[] = [];
 
 				BSON.deserializeStream(_file, 0, 1, Document, 0, deserializeOptions);
-				
+
 				Document.forEach((container) => {
 					if (!container.ID || !container.Tables) return;
 
-					if(container.ID === Container) _container = container;
+					if (container.ID === Container) _container = container;
 				});
 			}
 
 			return _container;
 
-		} 
-		else
-		{
+		}
+		else {
 			return this.Containers.get(Container);
 		}
 	}
-	
-	/**
-	 * @public
-	 * @async
-	 * @param {TypeResolvable} Content - Push content
-	 * @param {(string|number)} Reference - Reference to find the pointer easier
-	 * @param {(number|string)} id - Table ID
-	 * @param {string} [Container=false] - Container ID
-	 * @description Push data to container
-	 * @returns {Promise<void>}
-	 */
-	public async Add<T extends TypeResolvable>(Content: T, Reference: string | number, id?: number | string, Container?: string): Promise<void>
-	{
-		this.CheckFolders();
 
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
-		
+	public async Add(Reference: string | number, _schema: BaseSchema, values: ResolvableType[], Container?: string) {
+		if (!this.getFolders()) return;
+
+		let { schema, id, tableName } = _schema;
 		const pointer = this.GetPointer(Reference) as Pointer;
-
+		
 		if (pointer === undefined)
 			throw new Error("(ODB-05) Pointer not found.");
 
-		if (!Container)
-		{
-			let container = this.GetContainer(pointer.Containers[0]);
+		const container = Container ? this.GetContainer(Container) : this.GetContainer(pointer.Containers[0]);
 
-			if (!container)
-				throw new Error("(ODB-06) Container not found");
+		if (!tableName)
+			throw new Error("(ODB-12) The table name is not defined");
 
-			if (id === undefined)
-			{
-				const content = {
-					ID: uid(6),
-					Content
-				}
+		if (schema.table.length == 0)
+			throw new Error("");
 
-				container.Tables.push(content);
+		if (schema.table.length != values.length)
+			throw new Error("");
+
+		if (container === undefined)
+			throw new Error("(ODB-06) Container not found.");
+
+		schema.table.forEach((x, i) => {
+			if (x.type != typeof values[i] && values[i] != "auto_increment")
+				throw new Error("");
+
+			if (x.type !== "number" && values[i] == "auto_increment")
+				throw new Error("");
+
+			x.value = values[i];
+		});
+
+		container.Tables.forEach((x: TableType) => {
+			if (x.ID === id)
+				throw new Error("(ODB-07) The id is already in use.");
+
+			const _entity = x.$.find((x, i) => x.name == schema.table[i].name && x.name != "id");
+			const _index = x.$.findIndex((x, i) => x.name == schema.table[i].name && x.name != "id");
+
+			if (!_entity || _entity.type != schema.table[_index].type || _entity.primary != schema.table[_index].primary)
+				throw new Error("(ODB-11) The schemes are not compatible.");
+		});
+
+		schema.table.forEach((x, i) => {
+			if (x.value === "auto_increment") {
+				x.value = container?.Tables.length + 1;
 			}
-			else
-			{
-				container.Tables.forEach((x: any) =>
-				{
-					if (x.ID === id)
-						throw new Error("(ODB-07) The id is already in use.");
-				});
+		});
 
-				const content = {
-					ID: id,
-					Content
-				}
+		container.Tables.push({ ID: id, Name: tableName, $: schema.table });
 
-				container.Tables.push(content);
-			}
+		const _container = {
+			ID: container.ID,
+			Tables: container.Tables
+		};
 
-			const _container = {
-				ID: container.ID,
-				Tables: container.Tables
-			};
+		this.Containers.set(container.ID, _container);
 
-			this.Containers.set(container.ID, _container);
+		const buffer = Buffer.from(JSON.stringify(container));
+		const serialize = BSON.serializeWithBufferAndIndex(container, buffer);
 
-			await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', container.ID+'.bson'), BSON.serialize(container))
-				.catch((error) =>
-				{
-					if (error) Emitter.emit("error", error);
-				});
-		}
-		else
-		{
-			let container = this.GetContainer(Container);
+		await fs.promises.writeFile(path.join(this.getPath(), 'OpenDB', this.Database, 'Containers', container.ID + '.bson'), BSON.serialize(container, { index: serialize as number }))
+			.catch((error) => {
+				if (error) Emitter.emit("error", error);
+			});
 
-			if (!container)
-				throw new Error("(ODB-06) Container not found");
-
-			if (!id)
-			{
-				const content = {
-					ID: container.Tables.length == 0 ? 1 : container.Tables.length + 1,
-					Content
-				}
-
-				container.Tables.push(content);
-			}
-			else
-			{
-				container.Tables.forEach((x: any) =>
-				{
-					if (x.ID === id)
-						throw new Error("(ODB-07) The id is already in use.");
-				});
-
-				const content = {
-					ID: id,
-					Content
-				}
-
-				container.Tables.push(content);
-			}
-
-			const _container = {
-				ID: container.ID,
-				Tables: container.Tables
-			};
-
-			this.Containers.set(container.ID, _container);
-
-			await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', container.ID+'.bson'), BSON.serialize(container))
-				.catch((error) =>
-				{
-					if (error) Emitter.emit("error", error);
-				});
-		}
+		return new Entity(id, schema.table, this.getPath(), this.Database, _container, this.getBuffer());
 	}
 
 	/**
@@ -564,21 +472,16 @@ export class Client
 	 * @description Add an existing container or not, to a pointer
 	 * @returns {void}
 	 */
-	public async AddContainer(Reference: string | number, Container?: string | null): Promise<void>
-	{
-		this.CheckFolders();
-		
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
-		
+	public async AddContainer(Reference: string | number, Container?: string | null): Promise<void> {
+		if (!this.getFolders()) return;
+
 		const Pointer = this.GetPointer(Reference);
 		const containers = [];
 
 		if (typeof Pointer === "undefined" || !Pointer)
 			throw new Error("(ODB-05) Pointer not found");
 
-		if (typeof Container === "string")
-		{
+		if (typeof Container === "string") {
 			if (Container.length !== 18)
 				throw new Error("(ODB-09) This ID is not correct");
 
@@ -587,18 +490,16 @@ export class Client
 
 			containers.push(Container);
 		}
-		else
-		{
+		else {
 			const ID = uid(18);
 			containers.push(ID);
 
 			const container = {
-				ID:      ID,
+				ID: ID,
 				Content: []
 			};
 
-			fs.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', ID+'.bson'), BSON.serialize(container), (error) =>
-			{
+			fs.writeFile(path.join(this.getPath(), 'OpenDB', this.Database, 'Containers', ID + '.bson'), BSON.serialize(container), (error) => {
 				if (error) Emitter.emit("error", error);
 			});
 		}
@@ -610,14 +511,13 @@ export class Client
 		};
 
 		this.Pointers.set(Pointer.ID, {
-			ID:         Pointer.ID,
-			Reference:  Reference,
+			ID: Pointer.ID,
+			Reference: Reference,
 			Containers: containers
 		});
 
-		await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Pointers', pointer.ID+'.bson'), BSON.serialize(pointer))
-			.catch((error) => 
-			{
+		await fs.promises.writeFile(path.join(this.getPath(), 'OpenDB', this.Database, 'Pointers', pointer.ID + '.bson'), BSON.serialize(pointer))
+			.catch((error) => {
 				if (error) Emitter.emit("error", error);
 			});
 	}
@@ -629,40 +529,36 @@ export class Client
 	 * @param {string} [Container=false] - Container ID
 	 * @returns {(Table | undefined)}
 	 */
-	public Find(Reference: string | number, predicate: PredicateType<ContainerTable>, Container?: string): Table | undefined {
-		this.CheckFolders();
+	public Find(Reference: string | number, predicate: PredicateType<SchemaObject>, Container?: string): Entity | undefined {
+		if (!this.getFolders()) return;
 
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
-		
 		const pointer = this.GetPointer(Reference) as Pointer;
 
 		if (!pointer)
 			throw new Error("(ODB-05) Pointer not found");
 
-		if (!Container) {
-			const container = this.GetContainer(pointer.Containers[0]) as Container;
+		const container = Container ? this.GetContainer(Container) as Container : this.GetContainer(pointer.Containers[0]) as Container;
 
-			if (!container) 
-				throw new Error("(ODB-06) Container not found");
+		if (!container)
+			throw new Error("(ODB-06) Container not found");
 
-			const _container = container.Tables.find(predicate);
+		let id: string | number | undefined
+		let _container: SchemaObject[] | undefined;
 
-			if (!_container) return undefined;
+		container.Tables.forEach((x) => {
+			if (!x.$.find(predicate)) {
+				_container = undefined;
+				return undefined;
+			}
 
-			return new Table(_container.ID, _container.Content, this.Options.Path, this.Database, container);
-		} else {
-			const container = this.GetContainer(Container) as Container;
+			_container = x.$;
 
-			if (!container) 
-				throw new Error("(ODB-06) Container not found");
+			id = x.ID;
+		});
 
-			const _container = container.Tables.find(predicate);
+		if (!_container || !id) return undefined;
 
-			if (!_container) return undefined;
-	
-			return new Table(_container.ID, _container.Content, this.Options.Path, this.Database, container);
-		}
+		return new Entity(id, _container, this.getPath(), this.Database, container, this.getBuffer());
 	}
 
 	/**
@@ -672,27 +568,32 @@ export class Client
 	 * @param {string} [Container=false] - Container ID
 	 * @returns {(ContainerTable[] | undefined)}
 	 */
-	public Filter(Reference: string | number, predicate: PredicateType<ContainerTable>, Container?: string): ContainerTable[] | undefined {
+	public Filter(Reference: string | number, predicate: PredicateType<SchemaObject>, Container?: string): SchemaObject[] {
 		const pointer = this.GetPointer(Reference) as Pointer;
 
 		if (!pointer)
 			throw new Error("(ODB-05) Pointer not found");
 
-		if (!Container) {
-			const container = this.GetContainer(pointer.Containers[0]) as Container;
+		const container = Container ? this.GetContainer(Container) as Container : this.GetContainer(pointer.Containers[0]) as Container;
 
-			if (!container) 
-				throw new Error("(ODB-06) Container not found");
+		if (!container)
+			throw new Error("(ODB-06) Container not found");
 
-			return container.Tables.filter(predicate);
-		} else {
-			const container = this.GetContainer(Container) as Container;
+		let _container: SchemaObject[] = [];
 
-			if (!container) 
-				throw new Error("(ODB-06) Container not found");
+		if (!container)
+			throw new Error("(ODB-06) Container not found");
 
-			return container.Tables.filter(predicate);
-		}
+		container.Tables.forEach((x) => {
+			const _entity = x.$.find(predicate);
+
+			if (!_entity)
+				return;
+
+			_container.push(_entity);
+		});
+
+		return _container;
 	}
 
 	/**
@@ -704,323 +605,17 @@ export class Client
 	 * @description Delete Table
 	 * @returns {Promise<void>}
 	 */
-	public async DeleteTable(Reference: string | number, TableId: number, Container?: string): Promise<void>
-	{
-		this.CheckFolders();
-		
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
+	public async DeleteTable(Reference: string | number, TableId: number, Container?: string): Promise<void> {
+		if (!this.getFolders()) return;
 
 		const pointer = this.GetPointer(Reference);
 
 		if (pointer === undefined)
 			throw new Error("(ODB-05) Pointer not found.");
-
-		let container: any = undefined;
-
-		if (Container === undefined)
-		{
-			let found = false;
-			
-			pointer.Containers.forEach((x: string) =>
-			{
-				const _container = this.GetContainer(x);
-
-				if (_container === undefined)
-					throw new Error("(ODB-06) Container not found");
-				
-				_container.Tables.forEach((x: ContainerTable, i: number) => {
-					if (x.ID === TableId) 
-					{
-						found = true;
-						delete _container.Tables[i];
-					}
-				});
-
-				container = {
-					ID: _container.ID,
-					Tables: _container.Tables
-				};
-			});
-
-			if (!found)
-				throw new Error("(ODB-08) Key not found");
-
-			this.Containers.set(container.ID, container);
-
-			await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', container.ID+'.bson'), BSON.serialize(container))
-				.catch((error) =>
-				{
-					if (error) Emitter.emit("error", error);
-				});
-		}
-		else
-		{
-			const _container = this.GetContainer(Container);
-			let found = false;
-
-			if (_container === undefined)
-				throw new Error("(ODB-06) Container not found");
-
-			_container.Tables.forEach((x: ContainerTable, i: number) => {
-				if (x.ID === TableId) 
-				{
-					found = true;
-					delete _container.Tables[i];
-				}
-			});
-
-			container = {
-				ID: _container.ID,
-				Tables: _container.Tables
-			};
-
-			if (!found)
-				throw new Error("(ODB-08) Key not found");
-
-			this.Containers.set(container.ID, container);
-
-			await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', container.ID+'.bson'), BSON.serialize(container))
-				.catch((error) =>
-				{
-					if (error) Emitter.emit("error", error);
-				});
-		}
-	}
-	
-	/**
-	 * @public
-	 * @async
-	 * @param {(string|number)} Reference - Reference to find the pointer easier
-	 * @param {(string | number | null)} KeyName - Key name to search the container
-	 * @param {TypeResolvable} KeyValue - Key value to search the container
-	 * @param {string} [Container=false] - Container ID
-	 * @description Delete Table by Key
-	 * @returns {Promise<void>}
-	 */
-	public async DeleteTableByKey<T extends TypeResolvable>(Reference: string | number, KeyName: string | number | null, KeyValue: T, Container?: string): Promise<void>
-	{
-		this.CheckFolders();
 		
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
+		const container = Container ? this.GetContainer(Container) as Container : this.GetContainer(pointer.Containers[0]) as Container;
 
-		const pointer = this.GetPointer(Reference);
-
-		if (pointer === undefined)
-			throw new Error("(ODB-05) Pointer not found.");
-
-		let container: any = undefined;
-
-		if (Container === undefined)
-		{
-			let found = false;
-			pointer.Containers.forEach((x: string) =>
-			{
-				const _container = this.GetContainer(x);
-
-				if (_container === undefined)
-					throw new Error("(ODB-06) Container not found");
-
-				_container.Tables.forEach((x: any, i: number) =>
-				{
-					
-					if (typeof x.Content === "string" || Array.isArray(x.Content) || typeof x.Content === "number" && KeyName === null) 
-					{
-						if (x.Content === KeyValue)
-						{
-							found = true;
-							delete _container.Tables[i];
-						}
-					} 
-					else if (typeof x.Content === "object" && KeyName != null) 
-					{
-						if (x.Content[KeyName] === KeyValue)
-						{
-							found = true;
-							delete _container.Tables[i];
-						}
-					}
-				});
-
-				container = {
-					ID: _container.ID,
-					Tables: _container.Tables
-				};
-			});
-
-			if (!found)
-				throw new Error("(ODB-08) Key not found");
-
-			this.Containers.set(container.ID, container);
-
-			await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', container.ID+'.bson'), BSON.serialize(container))
-				.catch((error) =>
-				{
-					if (error) Emitter.emit("error", error);
-				});
-		}
-		else
-		{
-			const _container = this.GetContainer(Container);
-			let found = false;
-
-			if (_container === undefined)
-				throw new Error("(ODB-06) Container not found");
-
-			_container.Tables.forEach((x: any, i: number) =>
-			{
-				if (typeof x.Content === "string" || Array.isArray(x.Content) || typeof x.Content === "number" && KeyName === null) 
-				{
-					if (x.Content === KeyValue)
-					{
-						found = true;
-						delete _container.Tables[i];
-					}
-				} 
-				else if (typeof x.Content === "object" && KeyName != null) 
-				{
-					if (x.Content[KeyName] === KeyValue)
-					{
-						found = true;
-						delete _container.Tables[i];
-					}
-				}
-			});
-
-			container = {
-				ID: _container.ID,
-				Tables: _container.Tables
-			};
-
-			if (!found)
-				throw new Error("(ODB-08) Key not found");
-
-			this.Containers.set(container.ID, container);
-
-			await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', container.ID+'.bson'), BSON.serialize(container))
-				.catch((error) =>
-				{
-					if (error) Emitter.emit("error", error);
-				});
-		}
-	}
-
-	/**
-	 * @public
-	 * @async
-	 * @param {(string|number)} Reference - Reference to find the pointer easier
-	 * @param {(number|string|null)} KeyName - Key name to search the container
-	 * @param {TypeResolvable} KeyValue - Key value to search the container
-	 * @param {string} [Container=false] - Container ID
-	 * @description Delete Key
-	 * @returns {Promise<void>}
-	 */
-	public async DeleteKey<T extends TypeResolvable>(Reference: string | number, KeyName: string | number | null, KeyValue: T, Container?: string): Promise<void>
-	{
-		this.CheckFolders();
-		
-		if (typeof this.Options.Path === "undefined")
-			throw new Error("An error occurred and the path was not specified.");
-
-		const pointer = this.GetPointer(Reference);
-
-		if (pointer === undefined)
-			throw new Error("(ODB-05) Pointer not found.");
-
-		let container: any = undefined;
-
-		if (Container === undefined)
-		{
-			let found = true;
-			
-			pointer.Containers.forEach((x: string) =>
-			{
-				const _container = this.GetContainer(x);
-
-				if (_container === undefined)
-					throw new Error("(ODB-06) Container not found");
-
-				_container.Tables.forEach((x: any) =>
-				{
-					if (typeof x.Content === "string" || Array.isArray(x.Content) || typeof x.Content === "number" && KeyName === null) 
-					{
-						if (x.Content === KeyValue)
-						{
-							found = true;
-							delete x.Content;
-						}
-					} 
-					else if (typeof x.Content === "object" && KeyName != null) 
-					{
-						if (x.Content[KeyName] === KeyValue)
-						{
-							found = true;
-							delete x.Content[KeyName];
-						}
-					}
-				});
-
-				container = {
-					ID: _container.ID,
-					Tables: _container.Tables
-				};
-			});
-
-			if (!found)
-				throw new Error("(ODB-08) Key not found");
-
-			this.Containers.set(container.ID, container);
-
-			await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', container.ID+'.bson'), BSON.serialize(container))
-				.catch((error) =>
-				{
-					if (error) Emitter.emit("error", error);
-				});
-		}
-		else
-		{
-			const _container = this.GetContainer(Container);
-			let found = false;
-
-			if (_container === undefined)
-				throw new Error("(ODB-06) Container not found");
-
-			_container.Tables.forEach((x: any) =>
-			{
-				if (typeof x.Content === "string" || Array.isArray(x.Content) || typeof x.Content === "number" && KeyName === null) 
-				{
-					if (x.Content === KeyValue)
-					{
-						found = true;
-						delete x.Content;
-					}
-				} 
-				else if (typeof x.Content === "object" && KeyName != null) 
-				{
-					if (x.Content[KeyName] === KeyValue)
-					{
-						found = true;
-						delete x.Content[KeyName];
-					}
-				}	
-			});
-
-			container = {
-				ID: _container.ID,
-				Tables: _container.Tables
-			};
-
-			if (!found)
-				throw new Error("(ODB-08) Key not found");
-
-			this.Containers.set(container.ID, container);
-
-			await fs.promises.writeFile(path.join(this.Options.Path, 'OpenDB', this.Database, 'Containers', container.ID+'.bson'), BSON.serialize(container))
-				.catch((error) =>
-				{
-					if (error) Emitter.emit("error", error);
-				});
-		}
+		if (!container)
+			throw new Error("(ODB-06) Container not found");
 	}
 }

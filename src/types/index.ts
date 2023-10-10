@@ -13,18 +13,26 @@ export type Pointer = {
 
 export type AnyArray = object[] | string[] | number[];
 
-export type TypeResolvable = string | object | AnyArray | number;
+export type ResolvableType = string | number | AnyArray | object | boolean;
 
 export type Container = 
 {
 	ID: string,
-	Tables: ContainerTable[]
+	Tables: TableType[]
 }
 
-export type ContainerTable = 
+export type TableType = 
 {
 	ID: number | string,
-	Content: TypeResolvable
+	Name: string,
+	$: SchemaObject[]
 }
 
 export type PredicateType<T> = (value?: T, index?: number, array?: T[]) => unknown;
+
+export type SchemaObject = {
+    name: string
+    type: string
+    primary: boolean
+	value?: ResolvableType
+}

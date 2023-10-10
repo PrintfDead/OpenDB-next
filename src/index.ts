@@ -1,6 +1,6 @@
 import { NodeEmitter } from './structures/NodeEmitter';
 import { Client     } from './structures/Client';
-import { Pointer, Container, ContainerTable, PredicateType } from './types'; 
+import { Pointer, Container, TableType, PredicateType } from './types'; 
 
 export {
 
@@ -9,6 +9,6 @@ export {
 	
 	Pointer,
 	Container,
-	ContainerTable,
+	TableType,
 	PredicateType
 };

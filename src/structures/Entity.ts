@@ -1,30 +1,33 @@
-import { Container, TypeResolvable } from "../types";
+import { Container, TableType, SchemaObject, ResolvableType } from "../types";
 import path from 'path';
 import fs from 'fs';
 import BSON from 'bson';
 import { Emitter } from "./NodeEmitter";
+import BaseSchema from "./BaseSchema";
 
-export default class Table {
+export default class Entity {
     public readonly ID: string | number;
-    public Content: TypeResolvable;
+    public Table: SchemaObject[];
     private Path: string;
     private Database: string;
     private Container: Container
+    private Buffer: number;
 
     /**
      * @constructor
      * @param {(string | number)} ID - Table ID 
-     * @param {TypeResolvable} Content - Table Content
+     * @param {TableType} Table - Table Content
      * @param {string} Path - Database path
      * @param {string} Database - Database name 
      * @param {Container} Container - Container
      */
-    constructor(ID: string | number, Content: TypeResolvable, Path: string, Database: string, Container: Container) {
+    constructor(ID: string | number, Table: SchemaObject[], Path: string, Database: string, Container: Container, Buffer: number) {
         this.ID = ID;
-        this.Content = Content;
+        this.Table = Table;
         this.Path = Path;
         this.Database = Database;
         this.Container = Container;
+        this.Buffer = Buffer;
     }
 
     /**
@@ -48,13 +51,16 @@ export default class Table {
 
         this.Container.Tables.forEach((x) => {
             if (x.ID === this.ID) {
-                x.Content = this.Content;
+                x.$ = this.Table;
             }
         });
 
         console.log(this.Container);
 
-        await fs.promises.writeFile(path.join(this.Path, 'OpenDB', this.Database, 'Containers', this.Container.ID+'.bson'), BSON.serialize(this.Container))
+        const buffer = Buffer.alloc(this.Buffer, JSON.stringify(this.Container));
+		const serialize = BSON.serializeWithBufferAndIndex(this.Container, buffer);
+
+        await fs.promises.writeFile(path.join(this.Path, 'OpenDB', this.Database, 'Containers', this.Container.ID+'.bson'), BSON.serialize(this.Container, { index: serialize as number }))
 				.catch((error) =>
 				{
 					if (error) Emitter.emit("error", error);
